@@ -5,7 +5,8 @@
 param (
     [String] $ServerUri = "http://distribution.virk.dk",
     [Int] $size = 3000,
-    [String] $fileType = "xml"
+    [String] $fileType = "xml",
+    [String] $scrollTime = "30m"
 )
 
 
@@ -16,7 +17,7 @@ $tmpBC = $host.PrivateData.ProgressBackGroundColor
 $host.PrivateData.ProgressForeGroundColor = "Black"
 $host.PrivateData.ProgressBackGroundColor = "DarkBlue"
 
-Function newBody ($startingDate, $endingDate, $fileType) {
+Function newBody ($startingDate, $endingDate, $fileType) {0
     $jsonBody = @"
     {
         "query": {
@@ -36,8 +37,8 @@ Function newBody ($startingDate, $endingDate, $fileType) {
                 "filter": {
                     "range": {
                             "offentliggoerelsesTidspunkt": {
-                                "gt": "$startingDate",
-                                "lt": "$endingDate"
+                                "gte": "$startingDate",
+                                "lte": "$endingDate"
                             }
                     }
                 }
@@ -48,10 +49,10 @@ Function newBody ($startingDate, $endingDate, $fileType) {
     return $jsonBody
 }
 
-Function scrollBody ($scrollID) {
+Function scrollBody ($scrollID, $scrollTime) {
     $scrollBody = @"
     {
-        "scroll" : "1m",
+        "scroll" : "$scrollTime",
         "scroll_id": "$scrollID"
     }
 "@
@@ -107,7 +108,7 @@ $filePath = $filePath + "\" + $timeNow
 Write-Host "`n"
 
 #Setting up scroll uri
-$initUri = $ServerUri + "/offentliggoerelser/_search" + "?scroll=1m&size=$size"
+$initUri = $ServerUri + "/offentliggoerelser/_search" + "?scroll=$scrollTime&size=$size"
 $scrollUri = $ServerUri + "/_search/scroll/"
 
 #Setting date strings
@@ -118,11 +119,43 @@ $body = (newBody `
         -startingDate $startingDate `
         -endingDate $endingDate `
         -size $size `
-    | ConvertFrom-Json)
+    | ConvertTo-Json)
 
+
+<#$response = Invoke-RestMethod `
+    -Uri $initUri `
+    -Method POST `
+    -ContentType "application/json" `
+    -Body "{
+        "query": {
+            "bool" {
+                "must": [
+                    {
+                        "term": {
+                            "dokumenter.dokumentMimeType": "application"
+                        }
+                    },
+                    {
+                        "term": {
+                            "dokumenter.dokumentMimeType": "$fileType"
+                        }
+                    }
+                ],
+                "filter": {
+                    "range": {
+                        "offentliggoerelsesTidspunkt": {
+                            "gte": "$startingDate",
+                            "lte": "$endingDate"
+                        }
+                    }
+                }
+            }
+        }
+    }"
+#>
 #Invoking API to get total hits
 $response = (Invoke-WebRequest `
-        -Method GET `
+        -Method POST `
         -Uri $initUri `
         -ContentType 'application/json' `
         -Body $body)
@@ -148,11 +181,12 @@ For ($i = 1; $i -le $scrollAmount; $i++) {
     
     $body = (scrollBody `
             -scrollID $scrollID `
+            -scrollTime $scrollTime `
         | ConvertFrom-Json)
 
     $scrollParams = @{
         'Uri'             = $scrollUri
-        'Method'          = 'GET'
+        'Method'          = 'POST'
         'ContentType'     = 'applications/json'
         'Body'            = @{
             'scroll'    = '2m'
