@@ -1,10 +1,11 @@
 # Virk.dk downloader tool
 
 # Made by - Mathias Wrobel
+# https://github.com/mathwro/
 
 param (
     [String] $ServerUri = "http://distribution.virk.dk",
-    [Int] $size = 3000,
+    [Int] $size = 50,
     [String] $fileType = "xml",
     [String] $scrollTime = "30m"
 )
@@ -16,38 +17,6 @@ $tmpFC = $host.PrivateData.ProgressForeGroundColor
 $tmpBC = $host.PrivateData.ProgressBackGroundColor
 $host.PrivateData.ProgressForeGroundColor = "Black"
 $host.PrivateData.ProgressBackGroundColor = "DarkBlue"
-
-Function newBody ($startingDate, $endingDate, $fileType) {0
-    $jsonBody = @"
-    {
-        "query": {
-            "bool": {
-                "must": [
-                    {
-                        "term": {
-                            "dokumenter.dokumentMimeType": "application"
-                        }
-                    },
-                    {
-                        "term": {
-                            "dokumenter.dokumentMimeType": "$fileType"
-                        }
-                    }
-                ],
-                "filter": {
-                    "range": {
-                            "offentliggoerelsesTidspunkt": {
-                                "gte": "$startingDate",
-                                "lte": "$endingDate"
-                            }
-                    }
-                }
-            }
-        }
-    }
-"@
-    return $jsonBody
-}
 
 Function scrollBody ($scrollID, $scrollTime) {
     $scrollBody = @"
@@ -101,69 +70,67 @@ if ( -not ($filePath)) {
     $filePath = "$PSScriptRoot\downloads"
 }
 
-#Setting up additional parameters
-$timeNow = Get-Date -Format "yyyy-MMdd_HHmm"
-New-Item -ItemType Directory -Name $timeNow -Path $filePath | Out-Null
-$filePath = $filePath + "\" + $timeNow
-Write-Host "`n"
-
 #Setting up scroll uri
-$initUri = $ServerUri + "/offentliggoerelser/_search" + "?scroll=$scrollTime&size=$size"
+$initUri = $ServerUri + "/offentliggoerelser/_search" + "?scroll=$scrollTime"
 $scrollUri = $ServerUri + "/_search/scroll/"
 
 #Setting date strings
 $startingDate = $sDate + "T00:00:00.001Z"
 $endingDate = $eDate + "T23:59:59.505Z"
 
-$body = (newBody `
-        -startingDate $startingDate `
-        -endingDate $endingDate `
-        -size $size `
-    | ConvertTo-Json)
-
-
-<#$response = Invoke-RestMethod `
-    -Uri $initUri `
-    -Method POST `
-    -ContentType "application/json" `
-    -Body "{
-        "query": {
-            "bool" {
-                "must": [
-                    {
-                        "term": {
-                            "dokumenter.dokumentMimeType": "application"
-                        }
-                    },
-                    {
-                        "term": {
-                            "dokumenter.dokumentMimeType": "$fileType"
-                        }
+$body = @{
+    "size" = $size
+    "query" = @{
+        "bool" = @{
+            "filter" = @(
+                @{
+                    "term" = @{
+                        "dokumenter.dokumentMimeType" = "application"
                     }
-                ],
-                "filter": {
-                    "range": {
-                        "offentliggoerelsesTidspunkt": {
-                            "gte": "$startingDate",
-                            "lte": "$endingDate"
+                }
+                @{
+                    "term" = @{
+                        "dokumenter.dokumentMimeType" = "$fileType"
+                    }
+                }
+                @{
+                    "range" = @{
+                        "offentliggoerelsesTidspunkt" = @{
+                            "gte" = "$startingDate"
+                            "lte" = "$endingDate"
                         }
                     }
                 }
-            }
+            )
         }
-    }"
-#>
-#Invoking API to get total hits
-$response = (Invoke-WebRequest `
-        -Method POST `
-        -Uri $initUri `
-        -ContentType 'application/json' `
-        -Body $body)
-$response = $response | ConvertFrom-Json
+    }
+} | ConvertTo-Json -Depth 6
 
+
+#Invoking API to get total hits
+$initalParams = @{
+    'Uri'           = $initUri
+    'Method'        = 'POST'
+    'ContentType'   = 'application/json'
+    'Body'          = $body
+}
+$response = (Invoke-RestMethod @initalParams)
+
+
+#Setting up additional parameters
+$randomTimeID = Get-Date -Format fffff
+$folderName = "Dato_" + $sDate + "_" +$eDate + "_Antal_" + $response.hits.total + "_ID_" + $randomTimeID
+New-Item -ItemType Directory -Name $folderName -Path $filePath | Out-Null
+$filePath = $filePath + "\" + $folderName
+Write-Host "`n"
+
+
+#Running information
 Write-Host "Total hits:" $response.hits.total
 Write-Host "Max score:" $response.hits.max_score
 Write-Host "`n"
+Write-Host "We are still working :)"
+Write-Host "(Press Ctrl+C to cancel)"
 
 #Setting up for scroll
 $scrollID = $response._scroll_id
@@ -174,31 +141,30 @@ fileDownloader `
     -response $response `
     -filePath $filePath
 
+$currentPercent = 0
 For ($i = 1; $i -le $scrollAmount; $i++) {
     $currentPercent = $currentPercent + $singlePercent
-    $roundedPercent = [math]::Round($currentSubPercent, 2)
+    $roundedPercent = [math]::Round($currentPercent, 2)
     Write-Progress -Activity "`r$roundedPercent% : Downloading files" -PercentComplete $currentPercent
-    
-    $body = (scrollBody `
-            -scrollID $scrollID `
-            -scrollTime $scrollTime `
-        | ConvertFrom-Json)
+
+
+    $body = @{
+        "scroll"    = "$scrollTime"
+        "scroll_id" = "$scrollID"
+    } | ConvertTo-Json
 
     $scrollParams = @{
         'Uri'             = $scrollUri
         'Method'          = 'POST'
-        'ContentType'     = 'applications/json'
-        'Body'            = @{
-            'scroll'    = '2m'
-            'scroll_id' = $scrollId
-        }
-        'UseBasicParsing' = $true
+        'ContentType'     = 'application/json'
+        'Body'            = $body
     }
-    $response = Invoke-WebRequest @scrollParams | ConvertFrom-Json
+    $response = Invoke-RestMethod @scrollParams
 
     fileDownloader `
-        -reponse $response `
+        -response $response `
         -filePath $filePath
 }
+Write-Host "Job's done"
 $host.PrivateData.ProgressForeGroundColor = $tmpFC
 $host.PrivateData.ProgressBackGroundColor = $tmpBC
